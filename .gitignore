@@ -1,0 +1,11 @@
+sqlite3.def
+BiometricLogger.sln
+*.tlog
+*.filters
+ipch/
+*.db
+Debug/vc140.idb
+Debug/
+*.vcxproj
+*.sqlite
+*.rc
