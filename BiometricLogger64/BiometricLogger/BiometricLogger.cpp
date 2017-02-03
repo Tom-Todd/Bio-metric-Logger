@@ -19,8 +19,12 @@ WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 NOTIFYICONDATA nid = {};
 HHOOK hook;
+HHOOK hook2;
 HMODULE lib;
+HMODULE lib2;
 HWND hWnd;
+STARTUPINFO si;
+PROCESS_INFORMATION pi;
 bool HookInstalled = false;
 
 // Forward declarations of functions included in this code module:
@@ -44,9 +48,59 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
         return FALSE;
     }
 
+	//Inject Hook
+	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
+	if (lib) {
+		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, /*"_procedure@12"*/ "procedure"); //Get Procdeure address
+																							 //auto procedure2 = (HOOKPROC)GetProcAddress(lib2, "_procedure@12"); //Get Procdeure address
+
+		if (procedure) {
+			hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
+																		//hook2 = SetWindowsHookEx(WH_CALLWNDPROC, procedure2, lib2, 0);
+			DWORD test = GetLastError();
+			test = test;
+		}
+		else
+			printf("Can't find function in dll!\n"); //Error if the DLL doesn't contain the addressed procedure
+	}
+	else {
+		printf("Can't find dll!\n"); //Error if the DLL is missing
+	}
+	if (hook) {
+		printf("Hook installed properly!\n\n");
+		HookInstalled = true;
+	}
+	//}
+	//End Inject Hook
+
+	sqlite3 *database;
+	sqlite3_open("Database.sqlite", &database);
+	sqlite3_close(database);
+
+
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+
+	// Start the child process. 
+	if (!CreateProcess(L"D:\\Tom\\Documents\\Visual Studio 2015\\Projects\\BioLog32\\Debug\\BioLog32.exe",   // No module name (use command line)
+		NULL,        // Command line
+		NULL,           // Process handle not inheritable
+		NULL,           // Thread handle not inheritable
+		FALSE,          // Set handle inheritance to FALSE
+		0,              // No creation flags
+		NULL,           // Use parent's environment block
+		NULL,           // Use parent's starting directory 
+		&si,            // Pointer to STARTUPINFO structure
+		&pi)           // Pointer to PROCESS_INFORMATION structure
+		)
+	{
+		printf("CreateProcess failed (%d).\n", GetLastError());
+		return FALSE;
+	}
+
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_BIOMETRICLOGGER));
     MSG msg;
-
     // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
@@ -56,7 +110,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
             DispatchMessage(&msg);
         }
     }
-
     return (int) msg.wParam;
 }
 
@@ -120,33 +173,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    Shell_NotifyIcon(NIM_ADD, &nid) ? S_OK : E_FAIL;
    //End Set up Tray Icon
 
-   //Inject Hook
-   lib = LoadLibrary(L"D:\\Tom\\Documents\\Visual Studio 2013\\Projects\\hookDLL\\Debug\\hookDll.dll"); //Load DLL
-   if (lib) {
-	   auto procedure = (HOOKPROC)GetProcAddress(lib, "_procedure@12"); //Get Procdeure address
-	   if (procedure)
-		   hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
-	   else
-		   printf("Can't find function in dll!\n"); //Error if the DLL doesn't contain the addressed procedure
-   }
-   else {
-	   printf("Can't find dll!\n"); //Error if the DLL is missing
-   }
-   if (hook) {
-	   printf("Hook installed properly!\n\n");
-	   HookInstalled = true;
-   }
-   //End Inject Hook
-   
-   sqlite3 *database;
-   sqlite3_open("Database.sqlite", &database);
-   sqlite3_close(database);
-
-
-
    //Update and Show the Window
    ShowWindow(hWnd, nCmdShow);
-   UpdateWindow(hWnd);
    UpdateWindow(hWnd);
    return TRUE;
 }
@@ -163,6 +191,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+	DWORD exitCode = 0;
+	DWORD exitCodeThread = 0;
     switch (message)
     {
     case WM_COMMAND:
@@ -200,7 +230,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
 		//Remove Hook
 		FreeLibrary(lib);
+		//FreeLibrary(lib2);
 		UnhookWindowsHookEx(hook);
+		GetExitCodeProcess(pi.hProcess, &exitCode);
+		TerminateThread(pi.hThread, exitCodeThread);
+		TerminateProcess(pi.hProcess, (UINT)exitCode);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
 		//End Remove Hook
         PostQuitMessage(0);
         break;

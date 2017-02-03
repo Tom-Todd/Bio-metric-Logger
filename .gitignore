@@ -9,3 +9,14 @@ Debug/
 *.vcxproj
 *.sqlite
 *.rc
+BiometricLogger.VC.VC.opendb
+BiometricLogger/x64/Release/BiometricLogger.res
+x64/Release/BiometricLogger.iobj
+x64/Release/BiometricLogger.ipdb
+BiometricLogger64/x64/Release/BiometricLogger.iobj
+BiometricLogger64/x64/Release/BiometricLogger.ipdb
+*.sln
+*.sdf
+*.exp
+*.iobj
+*.ipdb
