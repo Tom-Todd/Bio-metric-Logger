@@ -1,6 +1,3 @@
-// BiometricLogger.cpp : Defines the entry point for the application.
-//
-
 #include "stdafx.h"
 #include "BiometricLogger.h"
 #include <Shellapi.h>
@@ -70,7 +67,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		printf("Hook installed properly!\n\n");
 		HookInstalled = true;
 	}
-	//}
 	//End Inject Hook
 
 	sqlite3 *database;
