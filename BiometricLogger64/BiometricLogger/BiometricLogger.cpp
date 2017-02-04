@@ -4,6 +4,8 @@
 #include <Windows.h>
 #include <Strsafe.h>
 #include "sqlite3.h"
+#include <thread>
+#include <atomic>
 #include <CommCtrl.h>
 #pragma comment(lib,"comctl32.lib")
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -19,16 +21,24 @@ HHOOK hook;
 HHOOK hook2;
 HMODULE lib;
 HMODULE lib2;
+HANDLE hPipe32;
 HWND hWnd;
 STARTUPINFO si;
 PROCESS_INFORMATION pi;
+std::thread pipeThread32;
+std::atomic_bool running = true;
+//int test = 0;
 bool HookInstalled = false;
+std::atomic_int test = 0;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+void pipeListener();
+int injectHook();
+int startLog32();
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow){
     UNREFERENCED_PARAMETER(hPrevInstance);
@@ -45,55 +55,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
         return FALSE;
     }
 
-	//Inject Hook
-	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
-	if (lib) {
-		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, /*"_procedure@12"*/ "procedure"); //Get Procdeure address
-																							 //auto procedure2 = (HOOKPROC)GetProcAddress(lib2, "_procedure@12"); //Get Procdeure address
+	//Inject the hook and check for error
+	if(injectHook() == -1)return -1;
+	//Start the 32 bit process and check for error
+	if(startLog32() == -1)return -1;
+	//Start a new thread to listen for messages from the 32 bit logger
+	pipeThread32 = std::thread(pipeListener);
 
-		if (procedure) {
-			hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
-																		//hook2 = SetWindowsHookEx(WH_CALLWNDPROC, procedure2, lib2, 0);
-			DWORD test = GetLastError();
-			test = test;
-		}
-		else
-			printf("Can't find function in dll!\n"); //Error if the DLL doesn't contain the addressed procedure
-	}
-	else {
-		printf("Can't find dll!\n"); //Error if the DLL is missing
-	}
-	if (hook) {
-		printf("Hook installed properly!\n\n");
-		HookInstalled = true;
-	}
-	//End Inject Hook
-
-	sqlite3 *database;
-	sqlite3_open("Database.sqlite", &database);
-	sqlite3_close(database);
-
-
-	ZeroMemory(&si, sizeof(si));
-	si.cb = sizeof(si);
-	ZeroMemory(&pi, sizeof(pi));
-
-	// Start the child process. 
-	if (!CreateProcess(L"D:\\Tom\\Documents\\Visual Studio 2015\\Projects\\BioLog32\\Debug\\BioLog32.exe",   // No module name (use command line)
-		NULL,        // Command line
-		NULL,           // Process handle not inheritable
-		NULL,           // Thread handle not inheritable
-		FALSE,          // Set handle inheritance to FALSE
-		0,              // No creation flags
-		NULL,           // Use parent's environment block
-		NULL,           // Use parent's starting directory 
-		&si,            // Pointer to STARTUPINFO structure
-		&pi)           // Pointer to PROCESS_INFORMATION structure
-		)
-	{
-		printf("CreateProcess failed (%d).\n", GetLastError());
-		return FALSE;
-	}
+	//sqlite3 *database;
+	//sqlite3_open("Database.sqlite", &database);
+	//sqlite3_close(database);
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_BIOMETRICLOGGER));
     MSG msg;
@@ -109,6 +80,41 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     return (int) msg.wParam;
 }
 
+
+
+void pipeListener() {
+	char buffer[1024];
+	DWORD dwRead;
+
+	//Create Named Pipe to Communicate with 32 Bit Process
+	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\Pipe"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
+		PIPE_WAIT,
+		1,
+		1024 * 16,
+		1024 * 16,
+		NMPWAIT_USE_DEFAULT_WAIT,
+		NULL);
+
+	if (hPipe32 == INVALID_HANDLE_VALUE)running = false;
+	//ConnectNamedPipe(hPipe32, NULL);
+
+	while (hPipe32 != INVALID_HANDLE_VALUE && running)
+	{
+		if (ConnectNamedPipe(hPipe32, NULL) != FALSE)   // wait for someone to connect to the pipe
+		{
+			while (ReadFile(hPipe32, buffer, sizeof(buffer) - 1, &dwRead, NULL) != FALSE)
+			{
+				/* add terminating zero */
+				buffer[dwRead] = '\0';
+
+				/* do something with data in buffer */
+				printf("%s", buffer);
+			}
+		}
+		DisconnectNamedPipe(hPipe32);
+	}
+	
+}
 
 //
 //  FUNCTION: MyRegisterClass()
@@ -233,6 +239,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		TerminateProcess(pi.hProcess, (UINT)exitCode);
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);
+		running = false;
+		pipeThread32.join();
 		//End Remove Hook
         PostQuitMessage(0);
         break;
@@ -260,4 +268,56 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
     return (INT_PTR)FALSE;
+}
+
+
+int injectHook() {
+	//Inject Hook
+	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
+	if (lib) {
+		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, /*"_procedure@12"*/ "procedure"); //Get Procdeure address
+																							 //auto procedure2 = (HOOKPROC)GetProcAddress(lib2, "_procedure@12"); //Get Procdeure address
+
+		if (procedure) {
+			hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
+			DWORD test = GetLastError();
+			test = test;
+		}else {
+			printf("Can't find function in dll!\n"); //Error if the DLL doesn't contain the addressed procedure
+			return -1;
+		}
+	}
+	else {
+		printf("Can't find dll!\n"); //Error if the DLL is missing
+		return -1;
+	}
+	if (hook) {
+		printf("Hook installed properly!\n\n");
+		HookInstalled = true;
+	}
+	//End Inject Hook
+}
+
+
+int startLog32() {
+	ZeroMemory(&si, sizeof(si));
+	si.cb = sizeof(si);
+	ZeroMemory(&pi, sizeof(pi));
+
+	// Start the child process. 
+	if (!CreateProcess(L"D:\\Tom\\Documents\\Visual Studio 2015\\Projects\\BioLog32\\Debug\\BioLog32.exe",   // No module name (use command line)
+		NULL,        // Command line
+		NULL,           // Process handle not inheritable
+		NULL,           // Thread handle not inheritable
+		FALSE,          // Set handle inheritance to FALSE
+		0,              // No creation flags
+		NULL,           // Use parent's environment block
+		NULL,           // Use parent's starting directory 
+		&si,            // Pointer to STARTUPINFO structure
+		&pi)           // Pointer to PROCESS_INFORMATION structure
+		)
+	{
+		printf("CreateProcess failed (%d).\n", GetLastError());
+		return -1;
+	}
 }

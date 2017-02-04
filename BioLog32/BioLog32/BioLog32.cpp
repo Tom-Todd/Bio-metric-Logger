@@ -23,9 +23,7 @@ HMODULE lib;
 bool HookInstalled = false;
 
 // Forward declarations of functions included in this code module:
-ATOM                MyRegisterClass(HINSTANCE hInstance);
-BOOL                InitInstance(HINSTANCE, int);
-LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+//LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -35,19 +33,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // TODO: Place code here.
-
-    // Initialize global strings
-    //LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
-    //LoadStringW(hInstance, IDC_BIOLOG32, szWindowClass, MAX_LOADSTRING);
-    //MyRegisterClass(hInstance);
-
-    // Perform application initialization:
-    /*if (!InitInstance (hInstance, nCmdShow))
-    {
-        return FALSE;
-    }*/
-	//HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_BIOLOG32));
 	hInst = hInstance;
 
 	//Inject Hook
@@ -73,6 +58,29 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 	//End Inject Hook
 
+	HANDLE hPipe;
+	DWORD dwWritten;
+
+
+	hPipe = CreateFile(TEXT("\\\\.\\pipe\\Pipe"),
+		GENERIC_READ | GENERIC_WRITE,
+		0,
+		NULL,
+		OPEN_EXISTING,
+		0,
+		NULL);
+	if (hPipe != INVALID_HANDLE_VALUE)
+	{
+		WriteFile(hPipe,
+			"Hello Pipe\n",
+			12,   // = length of string + terminating '\0' !!!
+			&dwWritten,
+			NULL);
+
+		CloseHandle(hPipe);
+	}
+
+
     MSG msg;
     // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
@@ -86,6 +94,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     return (int) msg.wParam;
 }
 
+
 //
 //  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
 //
@@ -96,6 +105,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 //  WM_DESTROY  - post a quit message and return
 //
 //
+/*
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
@@ -114,14 +124,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         break;
-   /* case WM_PAINT:
+    case WM_PAINT:
         {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
             // TODO: Add any drawing code that uses hdc here...
             EndPaint(hWnd, &ps);
         }
-        break;*/
+        break;
     case WM_DESTROY:
 		//Remove Hook
 		FreeLibrary(lib);
@@ -132,4 +142,4 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
     return 0;
-}
+}*/
