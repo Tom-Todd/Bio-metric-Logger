@@ -21,7 +21,6 @@ HHOOK hook;
 HHOOK hook2;
 HMODULE lib;
 HMODULE lib2;
-HANDLE hPipe32;
 HWND hWnd;
 STARTUPINFO si;
 PROCESS_INFORMATION pi;
@@ -37,6 +36,7 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 void pipeListener();
+void pipeListenerDLL();
 int injectHook();
 int startLog32();
 
@@ -55,16 +55,29 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
         return FALSE;
     }
 
+	//Start a new thread to listen for messages from the 32 bit logger
+	//pipeThread32 = std::thread(pipeListener);
+	//Start a new thread to listen for messages from the hooks
+	pipeThread32 = std::thread(pipeListenerDLL);
 	//Inject the hook and check for error
 	if(injectHook() == -1)return -1;
 	//Start the 32 bit process and check for error
-	if(startLog32() == -1)return -1;
-	//Start a new thread to listen for messages from the 32 bit logger
-	pipeThread32 = std::thread(pipeListener);
+	//if(startLog32() == -1)return -1;
+	
 
-	//sqlite3 *database;
-	//sqlite3_open("Database.sqlite", &database);
-	//sqlite3_close(database);
+	sqlite3 *database;
+	sqlite3_open("Database.sqlite", &database);
+	
+	const char* sql = "CREATE TABLE PROGRAM_EVENTS("  
+		"ID INT PRIMARY        KEY      NOT NULL," 
+		"TIME				   TEXT     NOT NULL," 
+		"PROGRAM_NAME          TEXT     NOT NULL," 
+		"EVENT				   TEXT     NOT NULL," 
+		"TYPE				   INT      NOT NULL);";
+
+	/* Execute SQL statement */
+	int rc = sqlite3_exec(database, sql, NULL, NULL, NULL);
+	sqlite3_close(database);
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_BIOMETRICLOGGER));
     MSG msg;
@@ -85,6 +98,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 void pipeListener() {
 	char buffer[1024];
 	DWORD dwRead;
+	HANDLE hPipe32;
 
 	//Create Named Pipe to Communicate with 32 Bit Process
 	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\Pipe"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
@@ -94,9 +108,6 @@ void pipeListener() {
 		1024 * 16,
 		NMPWAIT_USE_DEFAULT_WAIT,
 		NULL);
-
-	if (hPipe32 == INVALID_HANDLE_VALUE)running = false;
-	//ConnectNamedPipe(hPipe32, NULL);
 
 	while (hPipe32 != INVALID_HANDLE_VALUE && running)
 	{
@@ -109,11 +120,45 @@ void pipeListener() {
 
 				/* do something with data in buffer */
 				printf("%s", buffer);
+				if (!running)break;
 			}
 		}
 		DisconnectNamedPipe(hPipe32);
 	}
 	
+}
+
+void pipeListenerDLL() {
+	char buffer[2058];
+	DWORD dwRead;
+	HANDLE hPipe32;
+
+	//Create Named Pipe to Communicate with 32 Bit Process
+	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
+		PIPE_WAIT,
+		1,
+		2058 * 16,
+		2058 * 16,
+		NMPWAIT_USE_DEFAULT_WAIT,
+		NULL);
+
+	while (hPipe32 != INVALID_HANDLE_VALUE && running)
+	{
+		if (ConnectNamedPipe(hPipe32, NULL) != FALSE)   // wait for someone to connect to the pipe
+		{
+			while (ReadFile(hPipe32, buffer, sizeof(buffer) - 1, &dwRead, NULL) != FALSE)
+			{
+				/* add terminating zero */
+				buffer[dwRead] = '\0';
+
+				/* do something with data in buffer */
+				printf("%s", buffer);
+				if (!running)break;
+			}
+		}
+		DisconnectNamedPipe(hPipe32);
+		if (!running)break;
+	}
 }
 
 //
@@ -232,13 +277,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
 		//Remove Hook
 		FreeLibrary(lib);
-		//FreeLibrary(lib2);
 		UnhookWindowsHookEx(hook);
-		GetExitCodeProcess(pi.hProcess, &exitCode);
-		TerminateThread(pi.hThread, exitCodeThread);
-		TerminateProcess(pi.hProcess, (UINT)exitCode);
-		CloseHandle(pi.hProcess);
-		CloseHandle(pi.hThread);
+		//GetExitCodeProcess(pi.hProcess, &exitCode);
+		//TerminateThread(pi.hThread, exitCodeThread);
+		//TerminateProcess(pi.hProcess, (UINT)exitCode);
+		//CloseHandle(pi.hProcess);
+		//CloseHandle(pi.hThread);
 		running = false;
 		pipeThread32.join();
 		//End Remove Hook
@@ -275,8 +319,7 @@ int injectHook() {
 	//Inject Hook
 	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
 	if (lib) {
-		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, /*"_procedure@12"*/ "procedure"); //Get Procdeure address
-																							 //auto procedure2 = (HOOKPROC)GetProcAddress(lib2, "_procedure@12"); //Get Procdeure address
+		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "procedure"); //Get Procdeure address
 
 		if (procedure) {
 			hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
@@ -296,6 +339,7 @@ int injectHook() {
 		HookInstalled = true;
 	}
 	//End Inject Hook
+	return 0;
 }
 
 
