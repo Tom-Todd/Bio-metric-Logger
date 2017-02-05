@@ -23,18 +23,13 @@ struct Mutex {
 Mutex mutex;
 
 void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, TCHAR className) {
-	//::WaitForSingleObject(mutex.h, INFINITE);
-	//std::ofstream f("D:\\Tom\\Desktop\\output.txt", std::ios_base::app | std::ios_base::out);
-	//f << hour << ":" << min << ":" << sec << " - " << extract << " - " << eventType << " - " << className << std::endl;
-	//::ReleaseMutex(mutex.h);
-
 	HANDLE hPipe;
 	DWORD dwWritten;
 	char cHour[256];
 	char cMin[256];
 	char cSec[256];
 	char* punc = ":";
-	char* punc2 = " - ";
+	char* punc2 = "-";
 	_itoa(hour, cHour, 10);
 	_itoa(min, cMin, 10);
 	_itoa(sec, cSec, 10);
@@ -44,7 +39,7 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	strncat(outPut, cMin, 2);
 	strncat(outPut, punc, 1);
 	strncat(outPut, cSec, 2);
-	strncat(outPut, punc2, 3);
+	strncat(outPut, punc2, 1);
 	strncat(outPut, extract, 256);
 		hPipe = CreateFile(TEXT("\\\\.\\pipe\\PipeDLL"),
 			GENERIC_READ | GENERIC_WRITE,
@@ -57,7 +52,7 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	{
 		WriteFile(hPipe,
 			outPut,
-			268,   // = length of string + terminating '\0' !!!
+			266,   // = length of string + terminating '\0' !!!
 			&dwWritten,
 			NULL);
 		CloseHandle(hPipe);

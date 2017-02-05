@@ -130,8 +130,13 @@ void pipeListener() {
 
 void pipeListenerDLL() {
 	char buffer[2058];
+	char time[256];
+	char program[256];
+	int key = 0;
 	DWORD dwRead;
 	HANDLE hPipe32;
+	sqlite3 *database;
+	sqlite3_open("Database.sqlite", &database);
 
 	//Create Named Pipe to Communicate with 32 Bit Process
 	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
@@ -153,12 +158,43 @@ void pipeListenerDLL() {
 
 				/* do something with data in buffer */
 				printf("%s", buffer);
+
+				bool isTime = true;
+				bool isProgram = false;
+				int timeSize = 0;
+				for (int i = 0; i < dwRead; i++) {
+					if (isProgram) {
+						program[i-(timeSize+1)] = buffer[i];
+					}
+					if (buffer[i] == '-') {
+						isTime = false;
+						time[i] = '\0';
+						isProgram = true;
+					}
+					if (isTime) {
+						time[i] = buffer[i];
+						timeSize++;
+					}
+				}
+				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0, 0)";
+				sqlite3_stmt *statement;
+				sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+
+				sqlite3_bind_int(statement, 1, key);
+				sqlite3_bind_text(statement, 2, time, -1, SQLITE_STATIC);
+				sqlite3_bind_text(statement, 3, program, -1, SQLITE_STATIC);
+				int result = sqlite3_step(statement);
+				key++;
+				//int rc = sqlite3_exec(database, sql, NULL, NULL, NULL);
+
 				if (!running)break;
 			}
 		}
 		DisconnectNamedPipe(hPipe32);
+		sqlite3_close(database);
 		if (!running)break;
 	}
+
 }
 
 //
