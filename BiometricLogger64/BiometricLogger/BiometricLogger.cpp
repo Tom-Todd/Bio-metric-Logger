@@ -132,6 +132,7 @@ void pipeListenerDLL() {
 	char buffer[2058];
 	char time[256];
 	char program[256];
+	char eventType[256];
 	int key = 0;
 	DWORD dwRead;
 	HANDLE hPipe32;
@@ -161,32 +162,45 @@ void pipeListenerDLL() {
 
 				bool isTime = true;
 				bool isProgram = false;
+				bool isEvent = false;
 				int timeSize = 0;
+				int programSize = 0;
 				for (int i = 0; i < dwRead; i++) {
+					
 					if (isProgram) {
 						program[i-(timeSize+1)] = buffer[i];
+						programSize++;
+					}
+					if (isEvent) {
+						eventType[i - (timeSize+programSize+1)] = buffer[i];
 					}
 					if (buffer[i] == '-') {
-						isTime = false;
-						time[i] = '\0';
-						isProgram = true;
+						if (isTime) {
+							isTime = false;
+							time[i] = '\0';
+							isProgram = true;
+						}
+						else {
+							isEvent = true;
+							isProgram = false;
+							program[i] = '\0';
+						}
 					}
 					if (isTime) {
 						time[i] = buffer[i];
 						timeSize++;
 					}
 				}
-				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0, 0)";
+				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, ?, 0)";
 				sqlite3_stmt *statement;
 				sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
 
 				sqlite3_bind_int(statement, 1, key);
 				sqlite3_bind_text(statement, 2, time, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 3, program, -1, SQLITE_STATIC);
+				sqlite3_bind_text(statement, 4, eventType, -1, SQLITE_STATIC);
 				int result = sqlite3_step(statement);
 				key++;
-				//int rc = sqlite3_exec(database, sql, NULL, NULL, NULL);
-
 				if (!running)break;
 			}
 		}

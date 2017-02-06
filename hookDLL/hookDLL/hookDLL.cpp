@@ -41,6 +41,9 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	strncat(outPut, cSec, 2);
 	strncat(outPut, punc2, 1);
 	strncat(outPut, extract, 256);
+	strncat(outPut, punc2, 1);
+	strncat(outPut, eventType, 10);
+
 		hPipe = CreateFile(TEXT("\\\\.\\pipe\\PipeDLL"),
 			GENERIC_READ | GENERIC_WRITE,
 			0,
@@ -52,7 +55,7 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	{
 		WriteFile(hPipe,
 			outPut,
-			266,   // = length of string + terminating '\0' !!!
+			278,   // = length of string + terminating '\0' !!!
 			&dwWritten,
 			NULL);
 		CloseHandle(hPipe);
