@@ -72,8 +72,8 @@ extern "C" __declspec(dllexport) LRESULT WINAPI procedure(int nCode, WPARAM wPar
 		struct tm* now = localtime(&timeNow);
 		if (data->message == WM_QUIT || data->message == WM_CLOSE || data->message == WM_DESTROY || data->message == WM_CREATE || data->message == WM_SETFOCUS || data->message == WM_KILLFOCUS) {
 			//lets get the name of the program closed
-			char name[260];
-			GetWindowModuleFileNameA(data->hwnd, name, 260);
+			char name[256];
+			GetWindowModuleFileNameA(data->hwnd, name, 256);
 			//extract only the exe from the path
 			//char* extract = (char *)((DWORD)name + lstrlenA(name) - 1);
 			//while (extract != '\\')

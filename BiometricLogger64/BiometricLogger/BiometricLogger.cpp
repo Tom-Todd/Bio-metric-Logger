@@ -69,7 +69,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	sqlite3_open("Database.sqlite", &database);
 	
 	const char* sql = "CREATE TABLE PROGRAM_EVENTS("  
-		"ID INT PRIMARY        KEY      NOT NULL," 
+		/*"ID INT PRIMARY        KEY      NOT NULL,"*/ 
 		"TIME				   TEXT     NOT NULL," 
 		"PROGRAM_NAME          TEXT     NOT NULL," 
 		"EVENT				   TEXT     NOT NULL," 
@@ -93,7 +93,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     return (int) msg.wParam;
 }
 
-
+struct dataBaseEntry{
+	int key;
+	char time[256];
+	char program[256];
+	char eventType[256];
+};
 
 void pipeListener() {
 	char buffer[1024];
@@ -129,7 +134,7 @@ void pipeListener() {
 }
 
 void pipeListenerDLL() {
-	char buffer[2058];
+	char buffer[10000];
 	char time[256];
 	char program[256];
 	char eventType[256];
@@ -140,11 +145,11 @@ void pipeListenerDLL() {
 	sqlite3_open("Database.sqlite", &database);
 
 	//Create Named Pipe to Communicate with 32 Bit Process
-	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
+	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_MESSAGE,
 		PIPE_WAIT,
 		1,
-		2058 * 16,
-		2058 * 16,
+		10000 * 16,
+		10000 * 16,
 		NMPWAIT_USE_DEFAULT_WAIT,
 		NULL);
 
@@ -157,56 +162,44 @@ void pipeListenerDLL() {
 				/* add terminating zero */
 				buffer[dwRead] = '\0';
 
-				/* do something with data in buffer */
-				printf("%s", buffer);
-
-				bool isTime = true;
-				bool isProgram = false;
-				bool isEvent = false;
-				int timeSize = 0;
-				int programSize = 0;
-				for (int i = 0; i < dwRead; i++) {
+				int currentBuffer = 0;
+				int bufferInd = 0;
+				char* curBuffer =  time;
+				for (int i = 0; i < dwRead; i++) {		
+					if (buffer[i] != '-') {
+						curBuffer[bufferInd] = buffer[i];
+						if (buffer[i] == '\0')curBuffer[bufferInd] = '\0';
+						bufferInd++;
+					}
+					else {
+						currentBuffer++;
+						curBuffer[bufferInd] = '\0';
+						if (currentBuffer == 1)curBuffer = program;
+						if (currentBuffer == 2)curBuffer = eventType;
+						bufferInd = 0;
+					}
 					
-					if (isProgram) {
-						program[i-(timeSize+1)] = buffer[i];
-						programSize++;
-					}
-					if (isEvent) {
-						eventType[i - (timeSize+programSize+1)] = buffer[i];
-					}
-					if (buffer[i] == '-') {
-						if (isTime) {
-							isTime = false;
-							time[i] = '\0';
-							isProgram = true;
-						}
-						else {
-							isEvent = true;
-							isProgram = false;
-							program[i] = '\0';
-						}
-					}
-					if (isTime) {
-						time[i] = buffer[i];
-						timeSize++;
-					}
 				}
-				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, ?, 0)";
+				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0)";
 				sqlite3_stmt *statement;
 				sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-
-				sqlite3_bind_int(statement, 1, key);
-				sqlite3_bind_text(statement, 2, time, -1, SQLITE_STATIC);
-				sqlite3_bind_text(statement, 3, program, -1, SQLITE_STATIC);
-				sqlite3_bind_text(statement, 4, eventType, -1, SQLITE_STATIC);
+				//sqlite3_bind_int(statement, 1, key);
+				sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
+				sqlite3_bind_text(statement, 2, program, -1, SQLITE_STATIC);
+				sqlite3_bind_text(statement, 3, eventType, -1, SQLITE_STATIC);
 				int result = sqlite3_step(statement);
 				key++;
-				if (!running)break;
+				char sBuffer[10000];
+				sprintf_s(sBuffer, buffer);
+				OutputDebugStringA(sBuffer);
+				OutputDebugString(L"\n");
+				//if (!running)break;
 			}
 		}
+
 		DisconnectNamedPipe(hPipe32);
 		sqlite3_close(database);
-		if (!running)break;
+		//if (!running)break;
 	}
 
 }
