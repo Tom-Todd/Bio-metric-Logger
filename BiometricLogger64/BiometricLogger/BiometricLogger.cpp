@@ -28,20 +28,27 @@ HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 NOTIFYICONDATA nid = {};
+//The Handle of the hook used for applications
 HHOOK hook;
-HHOOK hook2;
+//The DLL used for application hooking
 HMODULE lib;
-HMODULE lib2;
+//The window handle
 HWND hWnd;
+//Information on the 32 bit thread
 STARTUPINFO si;
 PROCESS_INFORMATION pi;
+//Hook for the URL logging
 HWINEVENTHOOK LHook = 0;
-//std::thread pipeThread32;
+//Start the threads for listening to pipes from the other process and DLLs
+std::thread pipeThread32;
 std::thread pipeThreadDLL;
+//Is the program running, if not end the threads
 std::atomic_bool running = true;
+//Did the hook install correctly?
 bool HookInstalled = false;
+//If debugging the hook make true for console output
 bool debuggingProgramHook = false;
-std::atomic_int test = 0;
+//Database connection
 sqlite3 *database;
 //Mutex for the database
 std::mutex mutex;
@@ -54,7 +61,7 @@ INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 void pipeListener();
 void pipeListenerDLL();
 int injectHook();
-int startLog32();
+int startLog64();
 void Hook();
 
 
@@ -75,13 +82,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     }
 
 	//Start a new thread to listen for messages from the 32 bit logger
-	//pipeThread32 = std::thread(pipeListener);
+	pipeThread32 = std::thread(pipeListener);
 	//Start a new thread to listen for messages from the hooks
 	pipeThreadDLL = std::thread(pipeListenerDLL);
 	//Inject the hook and check for error
 	if(injectHook() == -1)return -1;
 	//Start the 32 bit process and check for error
-	//if(startLog32() == -1)return -1;
+	if(startLog64() == -1)return -1;
 	sqlite3_open("Database.sqlite", &database);
 	
 	const char* sql = "CREATE TABLE PROGRAM_EVENTS("  
@@ -158,9 +165,8 @@ void pipeListenerDLL() {
 	int key = 0;
 	DWORD dwRead;
 	HANDLE hPipe32;
-	//sqlite3 *database;
 
-	//Create Named Pipe to Communicate with 32 Bit Process
+	//Create Named Pipe to Communicate with DLL hook
 	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_MESSAGE,
 		PIPE_WAIT,
 		1,
@@ -196,8 +202,9 @@ void pipeListenerDLL() {
 					}
 					
 				}
+				//Lock the mutex
 				mutex.lock();
-				//sqlite3_open("Database.sqlite", &database);
+				//Try insetion into database
 				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0)";
 				sqlite3_stmt *statement;
 				sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
@@ -212,7 +219,7 @@ void pipeListenerDLL() {
 					OutputDebugStringA(sBuffer);
 					OutputDebugString(L"\n");
 				}
-				//sqlite3_close(database);
+				//Unlock the mutex
 				mutex.unlock();
 				if (!running)break;
 			}
@@ -227,9 +234,9 @@ void pipeListenerDLL() {
 //Method to inject the program monitoring hook
 int injectHook() {
 	//Inject Hook
-	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
+	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\Debug\\hookDll.dll"); //Load DLL
 	if (lib) {
-		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "procedure"); //Get Procdeure address
+		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "_procedure@12"); //Get Procdeure address
 
 		if (procedure) {
 			hook = SetWindowsHookEx(WH_CALLWNDPROC, procedure, lib, 0); //Set up the hook
@@ -254,14 +261,14 @@ int injectHook() {
 	return 0;
 }
 
-//Method to start the 32Bit logging software
-int startLog32() {
+//Method to start the 64Bit logging software
+int startLog64() {
 	ZeroMemory(&si, sizeof(si));
 	si.cb = sizeof(si);
 	ZeroMemory(&pi, sizeof(pi));
 
 	// Start the child process. 
-	if (!CreateProcess(L"D:\\Tom\\Documents\\Visual Studio 2015\\Projects\\BioLog32\\Debug\\BioLog32.exe",   // No module name (use command line)
+	if (!CreateProcess(L"D:\\Tom\\Documents\\Bio-metric-Logger\\BioLog64\\x64\\Debug\\BioLog64.exe",   // No module name (use command line)
 		NULL,        // Command line
 		NULL,           // Process handle not inheritable
 		NULL,           // Thread handle not inheritable
@@ -294,10 +301,11 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 
 	if ((hr == S_OK) && (pAcc != NULL))
 	{
-		BSTR bstrName, bstrValue;
+		BSTR bstrName, bstrValue, bstrDescription;
 		pAcc->get_accValue(varChild, &bstrValue);
 		pAcc->get_accChildCount(children);
 		pAcc->get_accName(varChild, &bstrName);
+		pAcc->get_accDescription(varChild, &bstrDescription);
 
 		TCHAR className[50];
 		GetClassName(hwnd, className, 50);
@@ -322,7 +330,7 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 			{
 				mutex.lock();
 				OutputDebugString(bstrValue);
-				OutputDebugString(className);
+				OutputDebugString(bstrDescription);
 				OutputDebugString(L"\n");
 				const char* sql = "INSERT INTO URLS VALUES(?)";
 				sqlite3_stmt *statement;
@@ -334,11 +342,11 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 			}
 		}
 		if (bstrName) {
-			if (/*(_tcscmp(className, TEXT("Windows.UI.Core.CoreWindow")) == 0) &&*/ (wcscmp(bstrName, L"Search or enter address") == 0))
+			if ((_tcscmp(className, TEXT("MozillaWindowClass")) == 0) && (wcscmp(bstrName, L"Search or enter address") == 0))
 			{
 				mutex.lock();
 				OutputDebugString(bstrValue);
-				OutputDebugString(className);
+				//OutputDebugString(className);
 				OutputDebugString(L"\n");
 				const char* sql = "INSERT INTO URLS VALUES(?)";
 				sqlite3_stmt *statement;
@@ -361,6 +369,15 @@ void Hook()
 
 	CoInitialize(NULL);
 	LHook = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_VALUECHANGE, 0, WinEventProc, 0, 0, WINEVENT_SKIPOWNPROCESS);
+}
+
+void Unhook()
+{
+	if (LHook == 0)
+		return;
+
+	UnhookWinEvent(LHook);
+	CoUninitialize();
 }
 
 //
@@ -481,11 +498,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		sqlite3_close(database);
 		FreeLibrary(lib);
 		UnhookWindowsHookEx(hook);
-		//GetExitCodeProcess(pi.hProcess, &exitCode);
-		//TerminateThread(pi.hThread, exitCodeThread);
-		//TerminateProcess(pi.hProcess, (UINT)exitCode);
-		//CloseHandle(pi.hProcess);
-		//CloseHandle(pi.hThread);
+		Unhook();
+		//Shutdown 64 bit process
+		GetExitCodeProcess(pi.hProcess, &exitCode);
+		TerminateThread(pi.hThread, exitCodeThread);
+		TerminateProcess(pi.hProcess, (UINT)exitCode);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
 		running = false;
 		pipeThreadDLL.join();
 		//End Remove Hook
