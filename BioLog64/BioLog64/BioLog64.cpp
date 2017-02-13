@@ -7,7 +7,6 @@
 #include <Shellapi.h>
 #include <Windows.h>
 #include <Strsafe.h>
-//#include "sqlite3.h"
 #include <CommCtrl.h>
 #pragma comment(lib,"comctl32.lib")
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -57,27 +56,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		HookInstalled = true;
 	}
 	//End Inject Hook
-
-	HANDLE hPipe;
-	DWORD dwWritten;
-
-
-	hPipe = CreateFile(TEXT("\\\\.\\pipe\\PipeDLL"),
-		GENERIC_READ | GENERIC_WRITE,
-		0,
-		NULL,
-		OPEN_EXISTING,
-		0,
-		NULL);
-	if (hPipe != INVALID_HANDLE_VALUE)
-	{
-		WriteFile(hPipe,
-			"Hello Pipe\n",
-			12,   // = length of string + terminating '\0' !!!
-			&dwWritten,
-			NULL);
-		CloseHandle(hPipe);
-	}
 
 	MSG msg;
 	// Main message loop:

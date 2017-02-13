@@ -7,6 +7,7 @@
 #include "sqlite3.h"
 #include <thread>
 #include <atomic>
+#include <vector>
 #include <CommCtrl.h>
 #include "Semaphore.h"
 #include <oleacc.h>
@@ -42,24 +43,30 @@ HWINEVENTHOOK LHook = 0;
 //Start the threads for listening to pipes from the other process and DLLs
 std::thread pipeThread32;
 std::thread pipeThreadDLL;
+std::thread databaseOut;
 //Is the program running, if not end the threads
 std::atomic_bool running = true;
 //Did the hook install correctly?
 bool HookInstalled = false;
 //If debugging the hook make true for console output
-bool debuggingProgramHook = false;
+bool debuggingProgramHook = true;
 //Database connection
 sqlite3 *database;
 //Mutex for the database
 std::mutex mutex;
+//Mutex for the statement list
+std::mutex DBStmt_lock;
+//
+std::vector<sqlite3_stmt*> DBStatments;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
-void pipeListener();
+//void pipeListener();
 void pipeListenerDLL();
+void databaseOutput();
 int injectHook();
 int startLog64();
 void Hook();
@@ -80,15 +87,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     {
         return FALSE;
     }
-
-	//Start a new thread to listen for messages from the 32 bit logger
-	pipeThread32 = std::thread(pipeListener);
 	//Start a new thread to listen for messages from the hooks
 	pipeThreadDLL = std::thread(pipeListenerDLL);
+	//Start a new thread to handle database output
+	databaseOut = std::thread(databaseOutput);
 	//Inject the hook and check for error
 	if(injectHook() == -1)return -1;
-	//Start the 32 bit process and check for error
-	if(startLog64() == -1)return -1;
+	//Start the 64 bit process and check for error
+	if (IsWow64Process) { //Check if this is 64 bit windows
+		if (startLog64() == -1)return -1;
+	}
 	sqlite3_open("Database.sqlite", &database);
 	
 	const char* sql = "CREATE TABLE PROGRAM_EVENTS("  
@@ -122,43 +130,36 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     return (int) msg.wParam;
 }
 
-////Method used for the 32 bit pipe listening thread
-void pipeListener() {
-	char buffer[1024];
-	DWORD dwRead;
-	HANDLE hPipe32;
-
-	//Create Named Pipe to Communicate with 32 Bit Process
-	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\Pipe"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE,
-		PIPE_WAIT,
-		1,
-		1024 * 16,
-		1024 * 16,
-		NMPWAIT_USE_DEFAULT_WAIT,
-		NULL);
-
-	while (hPipe32 != INVALID_HANDLE_VALUE && running)
-	{
-		if (ConnectNamedPipe(hPipe32, NULL) != FALSE)   // wait for someone to connect to the pipe
-		{
-			while (ReadFile(hPipe32, buffer, sizeof(buffer) - 1, &dwRead, NULL) != FALSE)
-			{
-				/* add terminating zero */
-				buffer[dwRead] = '\0';
-
-				/* do something with data in buffer */
-				printf("%s", buffer);
-				if (!running)break;
-			}
-		}
-		DisconnectNamedPipe(hPipe32);
-	}
-	
+void push_statement(sqlite3_stmt *statement) {
+	DBStmt_lock.lock();
+	DBStatments.push_back(statement);
+	DBStmt_lock.unlock();
 }
+
+sqlite3_stmt* try_pop_statement() {
+	sqlite3_stmt *out;
+	if (DBStmt_lock.try_lock()) {
+		out = DBStatments.end;
+		DBStatments.pop_back();
+		DBStmt_lock.unlock();
+	}
+	return out;
+}
+void databaseOutput() {
+	while (running) {
+		sqlite3_stmt* statement;
+		//if (try_pop_statement(statement)) {
+			mutex.lock();
+			int result = sqlite3_step(try_pop_statement());
+			mutex.unlock();
+		//}
+	}
+}
+
 
 //Method used for the DLL pipe listening thread
 void pipeListenerDLL() {
-	char buffer[10000];
+	char buffer[500];
 	char time[256];
 	char program[5000];
 	char eventType[256];
@@ -170,8 +171,8 @@ void pipeListenerDLL() {
 	hPipe32 = CreateNamedPipe(TEXT("\\\\.\\pipe\\PipeDLL"), PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_MESSAGE,
 		PIPE_WAIT,
 		1,
-		10000 * 16,
-		10000 * 16,
+		300 * 16,
+		300 * 16,
 		NMPWAIT_USE_DEFAULT_WAIT,
 		NULL);
 
@@ -203,7 +204,7 @@ void pipeListenerDLL() {
 					
 				}
 				//Lock the mutex
-				mutex.lock();
+				/*mutex.lock();*/
 				//Try insetion into database
 				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0)";
 				sqlite3_stmt *statement;
@@ -211,8 +212,9 @@ void pipeListenerDLL() {
 				sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 2, program, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 3, eventType, -1, SQLITE_STATIC);
-				int result = sqlite3_step(statement);
+				//int result = sqlite3_step(statement);
 				key++;
+				push_statement(statement);
 				if (debuggingProgramHook) {
 					char sBuffer[10000];
 					sprintf_s(sBuffer, buffer);
@@ -220,7 +222,7 @@ void pipeListenerDLL() {
 					OutputDebugString(L"\n");
 				}
 				//Unlock the mutex
-				mutex.unlock();
+				//mutex.unlock();
 				if (!running)break;
 			}
 		}
@@ -311,7 +313,7 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 		GetClassName(hwnd, className, 50);
 
 		if (bstrName) {
-			if ((_tcscmp(className, TEXT("Chrome_WidgetWin_1")) == 0) /*&& (wcscmp(bstrName, L"Address and search bar") == 0)*/)
+			if ((_tcscmp(className, TEXT("Chrome_WidgetWin_1")) == 0) && (wcscmp(bstrName, L"Address and search bar") == 0))
 			{
 				mutex.lock();
 				OutputDebugString(bstrValue);
@@ -495,18 +497,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		//Remove Tray Icon
 		Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
 		//Remove Hook
-		sqlite3_close(database);
 		FreeLibrary(lib);
 		UnhookWindowsHookEx(hook);
 		Unhook();
 		//Shutdown 64 bit process
-		GetExitCodeProcess(pi.hProcess, &exitCode);
-		TerminateThread(pi.hThread, exitCodeThread);
-		TerminateProcess(pi.hProcess, (UINT)exitCode);
-		CloseHandle(pi.hProcess);
-		CloseHandle(pi.hThread);
+		if (IsWow64Process) {
+			GetExitCodeProcess(pi.hProcess, &exitCode);
+			TerminateThread(pi.hThread, exitCodeThread);
+			TerminateProcess(pi.hProcess, (UINT)exitCode);
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+		}
 		running = false;
 		pipeThreadDLL.join();
+		sqlite3_close(database);
 		//End Remove Hook
         PostQuitMessage(0);
         break;
