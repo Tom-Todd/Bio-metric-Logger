@@ -74,7 +74,7 @@ extern "C" __declspec(dllexport) LRESULT WINAPI procedure(int nCode, WPARAM wPar
 			//lets get the name of the program closed
 			char name[256];
 			GetWindowModuleFileNameA(data->hwnd, name, 256);
-			if (strcmp( name, "C:\\WINDOWS\\SYSTEM32\\urlmon.dll") != 0) {
+			if (strcmp( name, "C:\\WINDOWS\\SYSTEM32\\urlmon.dll") != 0 && strlen(name) != 0) {
 				//LPWSTR className = new TCHAR[260];
 				TCHAR className[260];
 				GetClassName(data->hwnd, className, 260);
