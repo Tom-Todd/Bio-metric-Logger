@@ -9,7 +9,6 @@
 #include <atomic>
 #include <vector>
 #include <CommCtrl.h>
-#include "Semaphore.h"
 #include <oleacc.h>
 #include <stdio.h>
 #include <tchar.h>
@@ -17,6 +16,7 @@
 #include <mutex>
 #include <urlmon.h>
 #include <AtlConv.h>
+#include "HelperMethods.h"
 #pragma comment(lib,"comctl32.lib")
 #pragma comment(lib,"urlmon.lib")
 #pragma comment(lib, "user32.lib") 
@@ -47,7 +47,7 @@ std::thread pipeThread32;
 std::thread pipeThreadDLL;
 std::thread databaseOut;
 //Is the program running, if not end the threads
-std::atomic_bool running = true;
+bool running = true;
 //Did the hook install correctly?
 bool HookInstalled = false;
 //If debugging the hook make true for console output
@@ -56,12 +56,10 @@ bool debuggingProgramHook = true;
 sqlite3 *database;
 //Mutex for the database
 std::mutex mutex;
-//Mutex for the statement list
+//Mutex for the program data vector
 std::mutex DBStmt_lock;
-
-//
-std::vector<sqlite3_stmt*> DBStatments;
-
+//Boolean idicating if the program is running under 64 bit windows.
+BOOL is64;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -69,13 +67,14 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 //void pipeListener();
-void pipeListenerDLL();
-void databaseOutput();
-int injectHook();
-int startLog64();
-void Hook();
-
-
+void pipeListenerDLL(); //Method for the pipe listening thread
+void databaseOutput(); //Method for the database Output thread
+int injectHook(); //Method to inject the program hook
+int startLog64(); //Method to start the 64bit process
+void Hook(); //Method to hook for URL fetching
+struct programData; //Structure to hold returned data from the DLL
+void push_statement(programData line); //Method to push 
+bool try_pop_statement(programData &out);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow){
     UNREFERENCED_PARAMETER(hPrevInstance);
@@ -86,24 +85,25 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     LoadStringW(hInstance, IDC_BIOMETRICLOGGER, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
+	IsWow64Process(GetCurrentProcess(), &is64);
     // Perform application initialization:
     if (!InitInstance (hInstance, nCmdShow))
     {
         return FALSE;
     }
+	//Inject the hook and check for error
 	if (injectHook() == -1)return -1;
 	//Start a new thread to listen for messages from the hooks
 	pipeThreadDLL = std::thread(pipeListenerDLL);
 	//Start a new thread to handle database output
 	databaseOut = std::thread(databaseOutput);
-	//Inject the hook and check for error
-	
 	//Start the 64 bit process and check for error
-	//if (IsWow64Process()) { //Check if this is 64 bit windows
+	if (is64) { //Check if this is 64 bit windows
 		if (startLog64() == -1)return -1;
-	//}
+	}
+	//Lock the mutex for the database
+	mutex.lock();
 	sqlite3_open("Database.sqlite", &database);
-	
 	const char* sql = "CREATE TABLE PROGRAM_EVENTS("  
 		/*"ID INT PRIMARY        KEY      NOT NULL,"*/ 
 		"TIME				   TEXT     NOT NULL," 
@@ -119,9 +119,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	/* Execute SQL statement */
 	int rc = sqlite3_exec(database, sql, NULL, NULL, NULL);
 	int rc2 = sqlite3_exec(database, sql2, NULL, NULL, NULL);
-
+	//Unlock, statements done.
+	mutex.unlock();
+	
+	//Hook browsers for URL tracking
 	Hook();
 
+	//Window message loop
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_BIOMETRICLOGGER));
     MSG msg;
     // Main message loop:
@@ -136,19 +140,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     return (int) msg.wParam;
 }
 
-struct programData
-{
-	char time[256];
-	char program[5000];
-	char eventType[256];
-};
+//Vector containing data the DLL has sent back
+//This is used to output to the database
 std::vector<programData> programDataLines;
 
+//Access methods for the programDataLines vector
 void push_statement(programData line) {
 	std::lock_guard<std::mutex> lock(DBStmt_lock);
 	programDataLines.push_back(line);
 }
 
+//Access methods for the programDataLines vector
 bool try_pop_statement(programData &out) {
 	if (programDataLines.size() > 0) {
 		std::lock_guard<std::mutex> lock(DBStmt_lock);
@@ -158,11 +160,15 @@ bool try_pop_statement(programData &out) {
 	}
 	return false;
 }
+
+
+//Database output thread
+//Continuously loops checking if there is data to be output in the
+//programDataLines vector
 void databaseOutput() {
 	while (running) {
 		programData data;
-			if(try_pop_statement(data)){
-				//mutex.lock();
+			while(try_pop_statement(data)){
 				std::lock_guard<std::mutex> lock(mutex);
 				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(?, ?, ?, 0)";
 				sqlite3_stmt *statement;
@@ -171,9 +177,8 @@ void databaseOutput() {
 				sqlite3_bind_text(statement, 2, data.program, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 3, data.eventType, -1, SQLITE_STATIC);
 				int result = sqlite3_step(statement);
-				//mutex.unlock();
 			}
-			//Sleep(100);
+			Sleep(500);
 	}
 }
 
@@ -196,7 +201,7 @@ void pipeListenerDLL() {
 
 	while (hPipe32 != INVALID_HANDLE_VALUE && running)
 	{
-		if (ConnectNamedPipe(hPipe32, NULL) != FALSE)   // wait for someone to connect to the pipe
+		if (ConnectNamedPipe(hPipe32, NULL) != FALSE && running)   // wait for someone to connect to the pipe
 		{
 			while ((ReadFile(hPipe32, buffer, sizeof(buffer) - 1, &dwRead, NULL) != FALSE) && running)
 			{
@@ -227,12 +232,18 @@ void pipeListenerDLL() {
 					OutputDebugStringA(sBuffer);
 					OutputDebugString(L"\n");
 				}
-				if (!running)break;
+				if (!running) {
+					return;
+				}
 			}
-			if (!running)break;
+			if (!running) {
+				return;
+			}
 		}
 		DisconnectNamedPipe(hPipe32);
-		if (!running)break;
+		if (!running) {
+			return;
+		}
 	}
 }
 
@@ -291,45 +302,6 @@ int startLog64() {
 }
 
 
-/*
-Method to parse URL and return the domain name
-credit : http://www.zedwood.com/article/cpp-boost-url-regex
-*/
-std::string _trim(const std::string& str)
-{
-	size_t start = str.find_first_not_of(" \n\r\t");
-	size_t until = str.find_last_not_of(" \n\r\t");
-	std::string::const_iterator i = start == std::string::npos ? str.begin() : str.begin() + start;
-	std::string::const_iterator x = until == std::string::npos ? str.end() : str.begin() + until + 1;
-	return std::string(i, x);
-}
-
-/*
-Method to parse URL and return the domain name
-credit : http://www.zedwood.com/article/cpp-boost-url-regex
-*/
-std::string parse_url(const std::string& raw_url) //no boost
-{
-	std::string path, domain, x, protocol, port, query;
-	int offset = 0;
-	size_t pos1, pos2, pos3, pos4;
-	x = _trim(raw_url);
-	offset = offset == 0 && x.compare(0, 8, "https://") == 0 ? 8 : offset;
-	offset = offset == 0 && x.compare(0, 7, "http://") == 0 ? 7 : offset;
-	pos1 = x.find_first_of('/', offset + 1);
-	path = pos1 == std::string::npos ? "" : x.substr(pos1);
-	domain = std::string(x.begin() + offset, pos1 != std::string::npos ? x.begin() + pos1 : x.end());
-	path = (pos2 = path.find("#")) != std::string::npos ? path.substr(0, pos2) : path;
-	port = (pos3 = domain.find(":")) != std::string::npos ? domain.substr(pos3 + 1) : "";
-	domain = domain.substr(0, pos3 != std::string::npos ? pos3 : domain.length());
-	protocol = offset > 0 ? x.substr(0, offset - 3) : "";
-	query = (pos4 = path.find("?")) != std::string::npos ? path.substr(pos4 + 1) : "";
-	path = pos4 != std::string::npos ? path.substr(0, pos4) : path;
-	
-	return domain;
-}
-
-
 //Callback method for the URL hook
 void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 	DWORD event,
@@ -373,7 +345,7 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 			if ((_tcscmp(className, TEXT("Chrome_WidgetWin_1")) == 0) && (wcscmp(bstrName, L"Address and search bar") == 0) && bstrValue != NULL)
 			{
 				USES_CONVERSION;
-				if (wcsstr(bstrValue, L"https://") == NULL) {
+				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
 					char tmpStr[300] = "http://";
 					strncat(tmpStr, OLE2A(bstrValue), 256);
 					bstrValue = A2OLE(tmpStr);
@@ -385,15 +357,8 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 					OutputDebugString(L"\n");
 					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
 					sqlite3_stmt *statement;
-					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-					
+					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);			
 					std::string url = parse_url(OLE2A(bstrValue));
-					//char* hashedURL = new char[256];
-					
-					//std::size_t hash = std::hash<std::string>{}(url);
-					//_itoa(hash, hashedURL, 256);
-					//snprintf(hashedURL, sizeof(hashedURL), "%zu", hash);
-
 					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
 					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
 					
@@ -404,6 +369,13 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 		if (bstrName) {
 			if ((_tcscmp(className, TEXT("Windows.UI.Core.CoreWindow")) == 0) && (wcscmp(bstrName, L"Search or enter web address") == 0))
 			{
+				USES_CONVERSION;
+				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
+					char tmpStr[300] = "http://";
+					strncat(tmpStr, OLE2A(bstrValue), 256);
+					bstrValue = A2OLE(tmpStr);
+
+				}
 				if (IsValidURL(NULL, bstrValue, 0)) {
 					std::lock_guard<std::mutex> lock(mutex);
 					OutputDebugString(bstrValue);
@@ -412,9 +384,9 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
 					sqlite3_stmt *statement;
 					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-					USES_CONVERSION;
+					std::string url = parse_url(OLE2A(bstrValue));
 					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
-					sqlite3_bind_text(statement, 2, OLE2A(bstrValue), -1, SQLITE_STATIC);
+					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
 					int result = sqlite3_step(statement);
 				}
 			}
@@ -422,17 +394,24 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 		if (bstrName) {
 			if ((_tcscmp(className, TEXT("MozillaWindowClass")) == 0) && (wcscmp(bstrName, L"Search or enter address") == 0))
 			{
+				USES_CONVERSION;
+				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
+					char tmpStr[300] = "http://";
+					strncat(tmpStr, OLE2A(bstrValue), 256);
+					bstrValue = A2OLE(tmpStr);
+
+				}
 				if (IsValidURL(NULL, bstrValue, 0)) {
 					std::lock_guard<std::mutex> lock(mutex);
 					OutputDebugString(bstrValue);
-					//OutputDebugString(className);
+					OutputDebugString(className);
 					OutputDebugString(L"\n");
 					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
 					sqlite3_stmt *statement;
 					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-					USES_CONVERSION;
-					
+					std::string url = parse_url(OLE2A(bstrValue));
 					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
+					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
 					sqlite3_bind_text(statement, 2, OLE2A(bstrValue), -1, SQLITE_STATIC);
 					int result = sqlite3_step(statement);
 				}
@@ -574,27 +553,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_DESTROY:
 		//Remove Tray Icon
-		Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
+		//Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
 		//Remove Hook
 		running = false;
-		pipeThreadDLL.join();
-		
-		UnhookWindowsHookEx(hook);
-		FreeLibrary(lib);
-		Unhook();
-		//Shutdown 64 bit process
-		//if (IsWow64Process) {
+		if (is64) {
 			GetExitCodeProcess(pi.hProcess, &exitCode);
 			TerminateThread(pi.hThread, exitCodeThread);
 			TerminateProcess(pi.hProcess, (UINT)exitCode);
 			CloseHandle(pi.hProcess);
 			CloseHandle(pi.hThread);
-		//}	
-		//databaseOut.join();
-		
-		
+		}		
+		pipeThreadDLL.join();
+		databaseOut.join();
+		Unhook();
+		UnhookWindowsHookEx(hook);
 		sqlite3_close(database);
-		//End Remove Hook
         PostQuitMessage(0);
         break;
     default:
