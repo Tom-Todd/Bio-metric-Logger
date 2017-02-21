@@ -8,6 +8,7 @@
 #include <Windows.h>
 #include <Strsafe.h>
 #include <CommCtrl.h>
+#include <string>
 #pragma comment(lib,"comctl32.lib")
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -34,8 +35,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	hInst = hInstance;
 
+	wchar_t curDir[1000];
+	GetCurrentDirectory(1000, curDir);
+	std::wstring dir(curDir);
+	dir += std::wstring(TEXT("\\bin\\hookDLL64.dll"));
+
 	//Inject Hook
-	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Debug\\hookDll.dll");
+	lib = LoadLibrary(/*L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\x64\\Release\\hookDll.dll"*/dir.c_str());
 	if (lib) {
 		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "procedure"); //Get Procdeure address
 
@@ -44,12 +50,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 																		//hook2 = SetWindowsHookEx(WH_CALLWNDPROC, procedure2, lib2, 0);
 			DWORD test = GetLastError();
 			test = test;
-		}
-		else
+		}else {
 			printf("Can't find function in dll!\n"); //Error if the DLL doesn't contain the addressed procedure
-	}
-	else {
+			//return -1;
+		}
+	}else {
 		printf("Can't find dll!\n"); //Error if the DLL is missing
+		return -1;
 	}
 	if (hook) {
 		printf("Hook installed properly!\n\n");

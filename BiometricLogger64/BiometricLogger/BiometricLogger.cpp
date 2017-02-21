@@ -51,7 +51,7 @@ bool running = true;
 //Did the hook install correctly?
 bool HookInstalled = false;
 //If debugging the hook make true for console output
-bool debuggingProgramHook = true;
+bool debuggingProgramHook = false;
 //Database connection
 sqlite3 *database;
 //Mutex for the database
@@ -60,6 +60,10 @@ std::mutex mutex;
 std::mutex DBStmt_lock;
 //Boolean idicating if the program is running under 64 bit windows.
 BOOL is64;
+std::string previousURLEdge = "";
+std::string previousURLChrome = "";
+std::string previousURLFirefox = "";
+
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -140,6 +144,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
     return (int) msg.wParam;
 }
 
+
 //Vector containing data the DLL has sent back
 //This is used to output to the database
 std::vector<programData> programDataLines;
@@ -176,6 +181,10 @@ void databaseOutput() {
 				sqlite3_bind_text(statement, 1, data.time, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 2, data.program, -1, SQLITE_STATIC);
 				sqlite3_bind_text(statement, 3, data.eventType, -1, SQLITE_STATIC);
+				OutputDebugStringA(data.time);
+				OutputDebugStringA(data.program);
+				OutputDebugStringA(data.eventType);
+				OutputDebugString(L"\n");
 				int result = sqlite3_step(statement);
 			}
 			Sleep(500);
@@ -185,7 +194,7 @@ void databaseOutput() {
 
 //Method used for the DLL pipe listening thread
 void pipeListenerDLL() {
-	char buffer[500];
+	char buffer[1000];
 	programData data;
 	DWORD dwRead;
 	HANDLE hPipe32;
@@ -212,12 +221,15 @@ void pipeListenerDLL() {
 				int bufferInd = 0;
 				char* curBuffer =  data.time;
 				for (int i = 0; i < dwRead; i++) {		
-					if (buffer[i] != '-') {
+					if (buffer[i] != ',') {
 						curBuffer[bufferInd] = buffer[i];
 						if (buffer[i] == '\0')curBuffer[bufferInd] = '\0';
+						if (buffer[i] == ';') {
+							curBuffer[bufferInd] = '\0';
+							break;
+						}
 						bufferInd++;
-					}
-					else {
+					}else {
 						currentBuffer++;
 						curBuffer[bufferInd] = '\0';
 						if (currentBuffer == 1)curBuffer = data.program;
@@ -225,10 +237,11 @@ void pipeListenerDLL() {
 						bufferInd = 0;
 					}
 				}
-				push_statement(data);
+				if(strcmp(data.program, "combase.dll") != 0) push_statement(data);
 				if (debuggingProgramHook) {
 					char sBuffer[10000];
 					sprintf_s(sBuffer, buffer);
+					OutputDebugStringA("RAW: ");
 					OutputDebugStringA(sBuffer);
 					OutputDebugString(L"\n");
 				}
@@ -249,8 +262,12 @@ void pipeListenerDLL() {
 
 //Method to inject the program monitoring hook
 int injectHook() {
+	wchar_t curDir[1000];
+	GetCurrentDirectory(1000, curDir);
+	std::wstring dir(curDir);
+	dir += std::wstring(TEXT("\\bin\\hookDll.dll"));
 	//Inject Hook
-	lib = LoadLibrary(L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\Debug\\hookDll.dll"); //Load DLL
+	lib = LoadLibrary(/*L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\Debug\\hookDll.dll"*/dir.c_str()); //Load DLL
 	if (lib) {
 		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "_procedure@12"); //Get Procdeure address
 
@@ -283,8 +300,14 @@ int startLog64() {
 	si.cb = sizeof(si);
 	ZeroMemory(&pi, sizeof(pi));
 
+	
+	wchar_t curDir[1000];
+	GetCurrentDirectory(1000, curDir);
+	std::wstring dir(curDir);
+	dir += std::wstring(TEXT("\\BioLog64\\BioLog64.exe"));
+
 	// Start the child process. 
-	if (!CreateProcess(L"D:\\Tom\\Documents\\Bio-metric-Logger\\BioLog64\\x64\\Debug\\BioLog64.exe",   // No module name (use command line)
+	if (!CreateProcess(dir.c_str(),   // No module name (use command line)
 		NULL,        // Command line
 		NULL,           // Process handle not inheritable
 		NULL,           // Thread handle not inheritable
@@ -352,22 +375,33 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 					
 				}
 				if (IsValidURL(NULL, bstrValue, 0) == S_OK) {
-					std::lock_guard<std::mutex> lock(mutex);
-					OutputDebugString(bstrValue);
-					OutputDebugString(L"\n");
-					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
-					sqlite3_stmt *statement;
-					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);			
 					std::string url = parse_url(OLE2A(bstrValue));
-					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
-					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
-					
-					int result = sqlite3_step(statement);
+					if (url.substr(0, 4).compare("www.") == 0) {
+						url = url.substr(4, std::string::npos);
+					}
+					if (previousURLChrome.compare("") == 0 || previousURLChrome.compare(url) != 0) {
+						std::lock_guard<std::mutex> lock(mutex);
+						const char* sql = "INSERT INTO URLS VALUES(?, ?)";
+						sqlite3_stmt *statement;
+						std::hash<std::string> hasher;
+						size_t hash = hasher(url.c_str());
+						char hash_str[256] = "";
+						snprintf(hash_str, sizeof(hash_str), "%zu", hash);
+						sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+						if (strcmp("chrome-extension", url.c_str()) != 0) {
+							OutputDebugStringA(hash_str);
+							OutputDebugString(L"\n");
+							sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
+							sqlite3_bind_text(statement, 2, hash_str, -1, SQLITE_STATIC);
+						}
+						int result = sqlite3_step(statement);
+						previousURLChrome = url;
+					}
 				}
 			}
 		}
 		if (bstrName) {
-			if ((_tcscmp(className, TEXT("Windows.UI.Core.CoreWindow")) == 0) && (wcscmp(bstrName, L"Search or enter web address") == 0))
+			if ((_tcscmp(className, TEXT("Windows.UI.Core.CoreWindow")) == 0) && (wcscmp(bstrName, L"Search or enter web address") == 0) && bstrValue != NULL)
 			{
 				USES_CONVERSION;
 				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
@@ -376,44 +410,60 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 					bstrValue = A2OLE(tmpStr);
 
 				}
-				if (IsValidURL(NULL, bstrValue, 0)) {
-					std::lock_guard<std::mutex> lock(mutex);
-					OutputDebugString(bstrValue);
-					OutputDebugString(bstrDescription);
-					OutputDebugString(L"\n");
-					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
-					sqlite3_stmt *statement;
-					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+				if (IsValidURL(NULL, bstrValue, 0) == S_OK) {
 					std::string url = parse_url(OLE2A(bstrValue));
-					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
-					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
-					int result = sqlite3_step(statement);
+					if (url.substr(0, 4).compare("www.") == 0) {
+						url = url.substr(4, std::string::npos);
+					}
+					if (previousURLEdge.compare("") == 0 || previousURLEdge.compare(url) != 0) {
+						std::lock_guard<std::mutex> lock(mutex);
+						const char* sql = "INSERT INTO URLS VALUES(?, ?)";
+						sqlite3_stmt *statement;
+						sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+						std::hash<std::string> hasher;
+						size_t hash = hasher(url.c_str());
+						char hash_str[256] = "";
+						snprintf(hash_str, sizeof(hash_str), "%zu", hash);
+						OutputDebugStringA(hash_str);
+						OutputDebugString(L"\n");
+						sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
+						sqlite3_bind_text(statement, 2, hash_str, -1, SQLITE_STATIC);
+						int result = sqlite3_step(statement);
+						previousURLEdge = url;
+					}
 				}
 			}
 		}
 		if (bstrName) {
-			if ((_tcscmp(className, TEXT("MozillaWindowClass")) == 0) && (wcscmp(bstrName, L"Search or enter address") == 0))
+			if ((_tcscmp(className, TEXT("MozillaWindowClass")) == 0) && (wcscmp(bstrName, L"Search or enter address") == 0) && bstrValue != NULL)
 			{
 				USES_CONVERSION;
 				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
 					char tmpStr[300] = "http://";
 					strncat(tmpStr, OLE2A(bstrValue), 256);
 					bstrValue = A2OLE(tmpStr);
-
 				}
-				if (IsValidURL(NULL, bstrValue, 0)) {
-					std::lock_guard<std::mutex> lock(mutex);
-					OutputDebugString(bstrValue);
-					OutputDebugString(className);
-					OutputDebugString(L"\n");
-					const char* sql = "INSERT INTO URLS VALUES(?, ?)";
-					sqlite3_stmt *statement;
-					sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+				if (IsValidURL(NULL, bstrValue, 0) == S_OK) {
 					std::string url = parse_url(OLE2A(bstrValue));
-					sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
-					sqlite3_bind_text(statement, 2, url.c_str(), -1, SQLITE_STATIC);
-					sqlite3_bind_text(statement, 2, OLE2A(bstrValue), -1, SQLITE_STATIC);
-					int result = sqlite3_step(statement);
+					if (url.substr(0, 4).compare("www.") == 0) {
+						url = url.substr(4, std::string::npos);
+					}
+					if (previousURLFirefox.compare("") == 0 || previousURLFirefox.compare(url) != 0) {
+						std::lock_guard<std::mutex> lock(mutex);
+						const char* sql = "INSERT INTO URLS VALUES(?, ?)";
+						sqlite3_stmt *statement;
+						std::hash<std::string> hasher;
+						size_t hash = hasher(url.c_str());
+						char hash_str[256] = "";
+						snprintf(hash_str, sizeof(hash_str), "%zu", hash);
+						OutputDebugStringA(hash_str);
+						OutputDebugString(L"\n");
+						sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+						sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
+						sqlite3_bind_text(statement, 2, hash_str, -1, SQLITE_STATIC);
+						int result = sqlite3_step(statement);
+						previousURLFirefox = url;
+					}
 				}
 			}
 		}
@@ -487,20 +537,8 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    {
       return FALSE;
    }
-
-   //Set up Tray Icon
-   nid.cbSize = sizeof(nid);
-   nid.hWnd = hWnd;
-   nid.uFlags = NIF_ICON | NIF_TIP | NIF_GUID;
-   static const GUID myGUID = { 0x23977b55, 0x10e0, 0x4041,{ 0xb8, 0x62, 0xb1, 0x95, 0x41, 0x96, 0x36, 0x69 } };
-   nid.guidItem = myGUID;
-   StringCchCopy(nid.szTip, ARRAYSIZE(nid.szTip), L"Test application");
-   LoadIconMetric(hInst, MAKEINTRESOURCE(IDI_SMALL), LIM_SMALL, &(nid.hIcon));
-   Shell_NotifyIcon(NIM_ADD, &nid) ? S_OK : E_FAIL;
-   //End Set up Tray Icon
-
    //Update and Show the Window
-   ShowWindow(hWnd, nCmdShow);
+   //ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
    return TRUE;
 }
@@ -552,8 +590,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         break;
     case WM_DESTROY:
-		//Remove Tray Icon
-		//Shell_NotifyIcon(NIM_DELETE, &nid) ? S_OK : E_FAIL;
 		//Remove Hook
 		running = false;
 		if (is64) {

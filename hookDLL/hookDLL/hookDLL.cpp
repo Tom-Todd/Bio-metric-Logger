@@ -8,28 +8,15 @@
 
 HHOOK global;
 
-struct Mutex {
-	Mutex() {
-		h = ::CreateMutex(nullptr, false, L"{any-GUID-1247965802375274724957}");
-	}
-
-	~Mutex() {
-		::CloseHandle(h);
-	}
-
-	HANDLE h;
-};
-
-Mutex mutex;
-
-void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, TCHAR className) {
+void dll_write_func(const char* extract, char* eventType, int hour, int min, int sec) {
 	HANDLE hPipe;
 	DWORD dwWritten = 0;
 	char cHour[256];
 	char cMin[256];
 	char cSec[256];
 	char* punc = ":";
-	char* punc2 = "-";
+	char* punc2 = ",";
+	char* punc3 = ";";
 	_itoa(hour, cHour, 10);
 	_itoa(min, cMin, 10);
 	_itoa(sec, cSec, 10);
@@ -43,6 +30,7 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	strncat(outPut, extract, 256);
 	strncat(outPut, punc2, 1);
 	strncat(outPut, eventType, 10);
+	strncat(outPut, punc3, 1);
 
 		hPipe = CreateFile(TEXT("\\\\.\\pipe\\PipeDLL"),
 			GENERIC_READ | GENERIC_WRITE,
@@ -56,7 +44,7 @@ void dll_write_func(char* extract, char* eventType, int hour, int min, int sec, 
 	{
 		WriteFile(hPipe,
 			outPut,
-			278,   // = length of string + terminating '\0' !!!
+			279,   // = length of string + terminating '\0' !!!
 			NULL,
 			NULL);
 		CloseHandle(hPipe);
@@ -74,16 +62,28 @@ extern "C" __declspec(dllexport) LRESULT WINAPI procedure(int nCode, WPARAM wPar
 			//lets get the name of the program closed
 			char name[256];
 			GetWindowModuleFileNameA(data->hwnd, name, 256);
+
 			if (strcmp( name, "C:\\WINDOWS\\SYSTEM32\\urlmon.dll") != 0 && strlen(name) != 0) {
-				//LPWSTR className = new TCHAR[260];
-				TCHAR className[260];
-				GetClassName(data->hwnd, className, 260);
-				if (data->message == WM_QUIT)dll_write_func(name, "quit", now->tm_hour, now->tm_min, now->tm_sec, *className);
-				if (data->message == WM_CLOSE)dll_write_func(name, "close", now->tm_hour, now->tm_min, now->tm_sec, *className);
-				if (data->message == WM_DESTROY)dll_write_func(name, "destroy", now->tm_hour, now->tm_min, now->tm_sec, *className);
-				if (data->message == WM_CREATE)dll_write_func(name, "create", now->tm_hour, now->tm_min, now->tm_sec, *className);
-				if (data->message == WM_SETFOCUS)dll_write_func(name, "focus", now->tm_hour, now->tm_min, now->tm_sec, *className);
-				if (data->message == WM_KILLFOCUS)dll_write_func(name, "lose focus", now->tm_hour, now->tm_min, now->tm_sec, *className);
+				//LPWSTR className =  new wchar_t[260];
+				char className[256];
+
+				//TCHAR className[260];
+				std::string sName(name);
+				std::string sName2 = sName.substr(sName.find_last_of("\\")+1, std::string::npos);
+				const char* test = sName.c_str();
+				if (sName2.length() == 0)test = name;
+				
+				//if (strcmp(name, "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe") == 0) {
+				//	MessageBox(0, L"And text here", L"MessageBox caption", MB_OK);
+				//}
+
+				GetClassNameA(data->hwnd, className, 260);
+				if (data->message == WM_QUIT)dll_write_func(sName2.c_str(), "quit", now->tm_hour, now->tm_min, now->tm_sec);
+				if (data->message == WM_CLOSE)dll_write_func(sName2.c_str(), "close", now->tm_hour, now->tm_min, now->tm_sec);
+				if (data->message == WM_DESTROY)dll_write_func(sName2.c_str(), "destroy", now->tm_hour, now->tm_min, now->tm_sec);
+				if (data->message == WM_CREATE)dll_write_func(sName2.c_str(), "create", now->tm_hour, now->tm_min, now->tm_sec);
+				if (data->message == WM_SETFOCUS)dll_write_func(sName2.c_str(), "focus", now->tm_hour, now->tm_min, now->tm_sec);
+				if (data->message == WM_KILLFOCUS)dll_write_func(sName2.c_str(), "lose focus", now->tm_hour, now->tm_min, now->tm_sec);
 			}
 		}
 	}
