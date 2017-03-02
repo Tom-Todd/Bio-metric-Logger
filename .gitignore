@@ -21,3 +21,5 @@ BiometricLogger64/x64/Release/BiometricLogger.ipdb
 *.iobj
 *.ipdb
 *.opendb
+BiometricLogger64/Dependencies/
+BiometricLogger64/Installer/
