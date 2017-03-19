@@ -17,13 +17,12 @@
 #include <urlmon.h>
 #include <AtlConv.h>
 #include "HelperMethods.h"
-//#include "dll.h"
 #include "cryptlib.h"
 #include "hex.h"
 #include "cryptlib.h"
-#include "filters.h"    // StringSink
-#include "osrng.h"      // AutoSeededRandomPool
-#include "hex.h"        // HexEncoder
+#include "filters.h"
+#include "osrng.h"
+#include "hex.h"        
 #include "sha.h"
 #include "md5.h"
 #include "base64.h"
@@ -77,6 +76,7 @@ BOOL is64;
 std::string previousURLEdge = "";
 std::string previousURLChrome = "";
 std::string previousURLFirefox = "";
+CryptoPP::SHA256 hashN;
 
 
 // Forward declarations of functions included in this code module:
@@ -122,10 +122,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	//Lock the mutex for the database
 	mutex.lock();
 	CreateDirectory(L"C:\\BiometricLoggerDatabase", NULL);
-	sqlite3_open("C:\\BiometricLoggerDatabase\\Database.sqlite", &database);
+	char userName[256];
+	char databasePath[256] = "C:\\BiometricLoggerDatabase\\Database-";
+	char databaseExt[8] = ".sqlite";
+	DWORD sizeU = 256;
+	GetUserNameA(userName, &sizeU);
+	strncat(databasePath, userName, 256);
+	strncat(databasePath, databaseExt, 8);
+	sqlite3_open(databasePath, &database);
 	const char* sql = "CREATE TABLE PROGRAM_EVENTS("
 		"ID INTEGER PRIMARY        KEY      NOT NULL,"
-		/*"TIME				   TEXT     NOT NULL,"*/
 		"HOUR				   INT     NOT NULL,"
 		"MINUTE				   INT     NOT NULL,"
 		"SECOND				   INT     NOT NULL,"
@@ -134,7 +140,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 	const char* sql2 = "CREATE TABLE URLS("
 		"ID INTEGER PRIMARY        KEY      NOT NULL,"
-		/*"TIME				   TEXT     NOT NULL,"*/
 		"HOUR				   INT     NOT NULL,"
 		"MINUTE				   INT     NOT NULL,"
 		"SECOND				   INT     NOT NULL,"
@@ -227,9 +232,6 @@ void databaseOutput() {
 				const char* sql = "INSERT INTO PROGRAM_EVENTS VALUES(NULL, ?, ?, ?, ?, ?)";
 				sqlite3_stmt *statement;
 				sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-				/*sqlite3_bind_text(statement, 1, data.time, -1, SQLITE_STATIC);
-				sqlite3_bind_text(statement, 2, data.program, -1, SQLITE_STATIC);
-				sqlite3_bind_text(statement, 3, data.eventType, -1, SQLITE_STATIC);*/
 				sqlite3_bind_int(statement, 1, hour);
 				sqlite3_bind_int(statement, 2, min);
 				sqlite3_bind_int(statement, 3, sec);
@@ -325,7 +327,7 @@ int injectHook() {
 	std::wstring dir(curDir);
 	dir += std::wstring(TEXT("\\bin\\hookDll.dll"));
 	//Inject Hook
-	lib = LoadLibrary(/*L"D:\\Tom\\Documents\\Bio-Metric-Logger\\hookDLL\\Debug\\hookDll.dll"*/dir.c_str()); //Load DLL
+	lib = LoadLibrary(dir.c_str()); //Load DLL
 	if (lib) {
 		HOOKPROC procedure = (HOOKPROC)GetProcAddress(lib, "_procedure@12"); //Get Procdeure address
 
@@ -410,7 +412,6 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 	strncat(time, cMin, 2);
 	strncat(time, punc, 1);
 	strncat(time, cSec, 2);
-	CryptoPP::SHA256 hashN;
 
 	if ((hr == S_OK) && (pAcc != NULL))
 	{
@@ -449,7 +450,6 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 							OutputDebugStringA(digest.c_str());
 							OutputDebugString(L"\n");
 							sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
-							//sqlite3_bind_text(statement, 1, time, -1, SQLITE_STATIC);
 							sqlite3_bind_int(statement, 1, now->tm_hour);
 							sqlite3_bind_int(statement, 2, now->tm_min);
 							sqlite3_bind_int(statement, 3, now->tm_sec);
@@ -457,6 +457,41 @@ void CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook,
 						}
 						int result = sqlite3_step(statement);
 						previousURLChrome = url;
+					}
+				}
+			}
+		}
+		if (bstrName) {
+			if ((_tcscmp(className, TEXT("Windows.UI.Core.CoreWindow")) == 0) && (wcscmp(bstrName, L"Search or enter web address") == 0) && bstrValue != NULL)
+			{
+				USES_CONVERSION;
+				if (wcsstr(bstrValue, L"https://") == NULL && !(wcsstr(bstrValue, L".") == NULL)) {
+					char tmpStr[300] = "http://";
+					strncat(tmpStr, OLE2A(bstrValue), 256);
+					bstrValue = A2OLE(tmpStr);
+
+				}
+				if (IsValidURL(NULL, bstrValue, 0) == S_OK) {
+					std::string url = parse_url(OLE2A(bstrValue));
+					if (url.substr(0, 4).compare("www.") == 0) {
+						url = url.substr(4, std::string::npos);
+					}
+					if (previousURLEdge.compare("") == 0 || previousURLEdge.compare(url) != 0) {
+						std::lock_guard<std::mutex> lock(mutex);
+						const char* sql = "INSERT INTO URLS VALUES(NULL, ?, ?, ?, ?)";
+						sqlite3_stmt *statement;
+						sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+						std::string digest;
+						CryptoPP::StringSource foo(url, true, new CryptoPP::HashFilter(hashN, new CryptoPP::Base64Encoder(new CryptoPP::StringSink(digest))));
+						OutputDebugStringA(digest.c_str());
+						OutputDebugString(L"\n");
+						sqlite3_prepare_v2(database, sql, strlen(sql), &statement, NULL);
+						sqlite3_bind_int(statement, 1, now->tm_hour);
+						sqlite3_bind_int(statement, 2, now->tm_min);
+						sqlite3_bind_int(statement, 3, now->tm_sec);
+						sqlite3_bind_text(statement, 4, digest.c_str(), -1, SQLITE_STATIC);
+						int result = sqlite3_step(statement);
+						previousURLEdge = url;
 					}
 				}
 			}
